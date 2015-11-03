@@ -1,0 +1,55 @@
+#!/usr/bin/env node
+
+var debug = require('debug')('compose-watch')
+var program = require('commander')
+var path = require('path')
+var watch = require('node-watch')
+var cp = require('child_process')
+var spawn = cp.spawn
+
+// Requires the PYTHON version of docker-compose installed via
+// brew install docker-compose
+// Otherwise logs will not buffer properly:
+// see: https://github.com/docker/compose/issues/1838
+process.env.PYTHONUNBUFFERED = 1
+
+program
+  .version('1.0.0')
+  .option('-f, --file [file]', 'compose file (.yml)')
+  .option('-p, --project-name [project]', 'project')
+  .option('-s, --service [service]', 'service to monitor')
+  .parse(process.argv)
+
+var compose_file = program.file
+var project = program.project
+var service = program.service
+
+var exit = function (pid) { pid === app.pid && process.exit(0) }
+var attach = function (app) {
+  app.stdout.on('data', function (data) {
+    console.log(data.toString().trim())
+  })
+  app.stderr.on('data', function (data) {
+    console.log(data.toString().trim())
+  })
+  app.on('close', exit.bind(null, app.pid))
+}
+
+var app = spawn(__dirname + '/restart-service', [ compose_file, project, service ])
+attach(app)
+
+process.on('SIGINT', function () {
+  app.kill()
+})
+
+process.on('SIGTERM', function () {
+  app.kill()
+})
+
+watch(process.cwd(), function (filename) {
+  console.log(filename, 'changed')
+  app.kill()
+  app = spawn(__dirname + '/restart-service', [ compose_file, project, service ])
+  attach(app)
+});
+

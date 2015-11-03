@@ -1,0 +1,29 @@
+{
+  "name": "docker-compose-watch",
+  "version": "1.0.0",
+  "description": "rebuild/restart docker container on source file changes",
+  "main": "docker-compose-watch",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/lapwinglabs/docker-compose-watch.git"
+  },
+  "keywords": [
+    "docker-compose",
+    "watch"
+  ],
+  "bin": { "docker-compose-watch": "./docker-compose-watch" },
+  "author": "Lapwing Labs",
+  "license": "MIT",
+  "bugs": {
+    "url": "https://github.com/lapwinglabs/docker-compose-watch/issues"
+  },
+  "homepage": "https://github.com/lapwinglabs/docker-compose-watch#readme",
+  "dependencies": {
+    "commander": "^2.9.0",
+    "debug": "^2.2.0",
+    "node-watch": "^0.3.4"
+  }
+}
