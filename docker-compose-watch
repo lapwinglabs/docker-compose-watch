@@ -16,12 +16,12 @@ process.env.PYTHONUNBUFFERED = 1
 program
   .version('1.0.0')
   .option('-f, --file [file]', 'compose file (.yml)')
-  .option('-p, --project-name [project]', 'project')
+  .option('-p, --project-name [name]', 'project')
   .option('-s, --service [service]', 'service to monitor')
   .parse(process.argv)
 
 var compose_file = program.file
-var project = program.project
+var project = program.projectName
 var service = program.service
 
 var exit = function (pid) { pid === app.pid && process.exit(0) }
