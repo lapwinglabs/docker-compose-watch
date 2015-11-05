@@ -233,7 +233,11 @@ function launch_compose_file (filename, json, services, options) {
     }).then(function remove_containers () {
       return spawnAndWait('docker-compose', [ '-f', '-', '-p', project, 'rm', '-f' ], opts)
     }).then(function rebuild_containers () {
-      return spawnAndWait('docker-compose', [ '-f', '-', '-p', project, 'build' ], opts)
+      return Object.keys(json)
+    }).map(function rebuild_containers (service_name) {
+      var service = services[service_name]
+      if (!service.service.build) return
+      return spawnAndWait('docker', [ 'build', '-t', service.project + '_' + service.name, service.service.build ], opts)
     })
   }
 
@@ -286,12 +290,14 @@ function restart_service (service, options) {
     on_err: on_err
   }
 
+  if (service.log) service.log.kill()
   return Promise.resolve().then(function stop_container () {
     return spawnAndWait('docker-compose', [ '-f', '-', '-p', project, 'stop', '-t', '0', service.name ], opts)
   }).then(function remove_container () {
     return spawnAndWait('docker-compose', [ '-f', '-', '-p', project, 'rm', '-f', service.name ], opts)
   }).then(function build_container () {
-    return spawnAndWait('docker-compose', [ '-f', '-', '-p', project, 'build', service.name ], opts)
+    if (!service.service.build) return
+    return spawnAndWait('docker', [ 'build', '-t', service.project + '_' + service.name, service.service.build ], opts)
   }).then(function launch_container () {
     var args = [ '-f', '-', '-p', project, 'up', '-d', '--no-deps', service.name ]
     return spawnAndWait('docker-compose', args, opts)
@@ -300,7 +306,6 @@ function restart_service (service, options) {
   }).then(function set_container_name (name_ps) {
     service.container = String(name_ps.stdout).trim()
   }).then(function attach_to_logs () {
-    if (service.log) service.log.kill()
     var args = [ '-f', '-', '-p', project, 'logs', '--no-color', service.name ]
     var ps = cp.spawn('docker-compose', args, opts)
     ps.stdout.on('data', log_lines.bind(service, 'log'))
@@ -408,4 +413,3 @@ function host_volumes (services, service, dir) {
 //   if (Object.keys(apps).length === 0) process.exit(0)
 //   for (var service in apps) apps[service].kill()
 // })
-
