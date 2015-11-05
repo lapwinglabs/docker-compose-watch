@@ -1,0 +1,34 @@
+logger:
+  container_name: test_logger
+  image: ubuntu
+  command: 'sh -c "while true; do echo doing logging; sleep 4; done"'
+
+cache:
+  image: ubuntu
+  container_name: test_cache
+  ports:
+    - '6379:6379'
+  volumes_from:
+    - cache_data
+  volumes:
+    - ../config/cache.conf:/usr/local/etc/cache/cache.conf
+  command: 'sh -c "while true; do echo caching data; sleep 2; done"'
+
+cache_data:
+  image: tianon/true
+  volumes:
+    - /data
+
+db:
+  image: ubuntu
+  container_name: test_db
+  ports:
+    - '27017:27017'
+  volumes_from:
+    - db_data
+  command: 'sh -c "while true; do echo storing data; sleep 3; done"'
+
+db_data:
+  image: tianon/true
+  volumes:
+    - /data/db
