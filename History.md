@@ -1,4 +1,9 @@
 
+1.1.2 / 2015-11-05
+==================
+
+  * fix bug causing infinite recursion when resolving volumes in extended services
+
 1.1.1 / 2015-11-04
 ==================
 
