@@ -5,12 +5,9 @@ var Promise = require('bluebird')
 var program = require('commander')
 var path = require('path')
 var filewatch = require('node-watch')
-var ps = require('ps-node')
 var yaml = require('js-yaml')
-var fs   = require('fs')
+var fs = require('fs')
 var except = require('except')
-var assign = require('object-assign')
-var stream = require('stream')
 var cp = require('child_process')
 var match = require('minimatch')
 var spawn = cp.spawn
@@ -136,6 +133,11 @@ function relaunch (compose_file, options) {
       namespace: options.namespace ? options.namespace + '.' + namespace : namespace
     }).then(function (external_services) {
       for (var service in external_services) {
+        var this_namespace = namespace.split('.')
+        var service_namespace = external_services[service].namespace.split('.')
+        if (this_namespace.length < service_namespace.length) {
+          external_services[service].namespace = this_namespace
+        }
         services[namespace + '.' + service] = external_services[service]
       }
     }))
@@ -192,8 +194,8 @@ function relaunch (compose_file, options) {
       services[service_name].color = log_colors[(color_index++) % log_colors.length]
       services[service_name].yaml = yaml.safeDump(compose_json)
       services[service_name].compose_file = compose_file
-      services[service_name].namespace = options.namespace
       services[service_name].project = project
+      services[service_name].namespace = options.namespace || ''
 
       var tag = service_name
       if (options.namespace) tag = options.namespace + '.' + tag
