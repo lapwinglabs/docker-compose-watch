@@ -364,7 +364,7 @@ function resolve_service_volumes (services, service, dir) {
 
     // pull any volumes from the extended service
     extended = extended[service.extends.service]
-    volumes = volumes.concat(resolve_service_volumes(services, service, path.dirname(abs_path)))
+    volumes = volumes.concat(resolve_service_volumes(services, extended, path.dirname(abs_path)))
   }
 
   //
