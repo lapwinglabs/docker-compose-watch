@@ -240,8 +240,8 @@ function launch_compose_file (filename, json, services, options) {
     return spawnAndWait('docker-compose', args, opts)
   }).then(function get_service_names () {
     return Object.keys(json)
-  }).map(function get_container_name (service_name) {
-    var container = cp.spawnSync(__dirname + '/name', [ project, service_name ], opts)
+  }).map(function (service_name) {
+    var container = cp.spawnSync(__dirname + '/container-name', [ project, service_name ], opts)
     return { name: service_name, container: String(container.stdout).trim() }
   }).map(function set_container_name (service) {
     services[service.name].container = service.container
@@ -327,8 +327,8 @@ function log_lines(pipe, lines) {
     data = data.trim()
     data = data.split('|')
     var tag = data[0].trim()
-    if (this.namespace) tag = this.namespace + '.' + tag
     if (data.length > 1) {
+      if (this.namespace) tag = this.namespace + '.' + tag
       longest_tag = Math.max(longest_tag, tag.length)
       while (tag.length < longest_tag) tag += ' '
       tag += ' |'
