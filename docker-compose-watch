@@ -136,7 +136,7 @@ function relaunch (compose_file, options) {
         var this_namespace = namespace.split('.')
         var service_namespace = external_services[service].namespace.split('.')
         if (this_namespace.length < service_namespace.length) {
-          external_services[service].namespace = this_namespace
+          external_services[service].namespace = this_namespace.join('.')
         }
         services[namespace + '.' + service] = external_services[service]
       }
