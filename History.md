@@ -1,4 +1,9 @@
 
+2.0.0 / 2016-08-24
+==================
+
+  * simplified to a bash script that works much better with docker-compose 1.8.0(+?). Requires compose v2 format. Assumes mac environment.
+
 1.1.3 / 2015-11-05
 ==================
 
