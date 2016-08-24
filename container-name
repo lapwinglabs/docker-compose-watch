@@ -1,3 +1,0 @@
-#!/bin/bash
-
-docker-compose -f - -p $1 ps $2 | tail -n +3 | awk '{ print $1 }'

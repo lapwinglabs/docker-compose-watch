@@ -1,415 +1,118 @@
-#!/usr/bin/env node
+#! /bin/bash
 
-var debug = require('debug')('docker-compose-watch')
-var Promise = require('bluebird')
-var program = require('commander')
-var path = require('path')
-var filewatch = require('node-watch')
-var yaml = require('js-yaml')
-var fs = require('fs')
-var except = require('except')
-var cp = require('child_process')
-var match = require('minimatch')
-var spawn = cp.spawn
-var colors = require('colors/safe')
-var c = colors
-var log_colors = [ c.red, c.green, c.yellow, c.blue, c.magenta, c.cyan, c.grey ]
-c = colors.dim
-log_colors = log_colors.concat([ c.red, c.green, c.yellow, c.blue, c.magenta, c.cyan, c.grey ])
+deps=
+if ! which yaml2json &> /dev/null; then
+  echo "This script requires that yaml2json be installed (https://github.com/bronze1man/yaml2json)"
+  deps=1
+fi
 
-var spawnAndWait = function (cmd, args, options) {
-  return Promise.fromCallback(function (done) {
-    var on_log = options.on_log
-    var on_err = options.on_err || options.on_log
-    var ps = cp.spawn(cmd, args, options)
-    options.input && ps.stdin.write(options.input) && ps.stdin.end()
-    on_log && ps.stdout.on('data', on_log)
-    on_err && ps.stderr.on('data', on_err)
-    ps.on('close', function (status) {
-      done(null, status)
-    })
-  })
+if ! which docker-compose &> /dev/null; then
+  echo "This script requires that docker-compose be installed (https://github.com/docker/compose/blob/master/docs/install.md)"
+  deps=1
+fi
+
+if ! which fswatch &> /dev/null; then
+  echo "This script requires that fswatch be installed (brew install fswatch)"
+  deps=1
+fi
+
+if ! which jq &> /dev/null; then
+  echo "This script requires that jq be installed (brew install jq)"
+  deps=1
+fi
+
+if ! which gdate &> /dev/null; then
+  echo "This script requires the GNU coreutils date command (brew install coreutils)"
+  deps=1
+fi
+
+if [[ "$deps" == "1" ]]; then exit 1; fi
+
+function cleanup {
+  docker-compose stop $SERVICES
+  exit 0
 }
 
-// Requires the PYTHON version of docker-compose installed via
-// brew install docker-compose
-// Otherwise logs will not buffer properly:
-// see: https://github.com/docker/compose/issues/1838
+SERVICES=
+LOGS=
+EXCLUDES=
 
-// TODO check that docker-compose python script is installed
-process.env.PYTHONUNBUFFERED = 1
+while [ "$1" != "" ]; do
+  PARAM=`printf "%s\n" "$1" | awk -F= '{print $1}'`
+  VALUE=`printf "%s\n" "$1" | awk -F= '{print $2}'`
+  case $PARAM in
+    -h | --help)
+      usage
+      exit
+      ;;
+    -l | --log)
+      if [[ "$VALUE" == "" ]]; then
+        shift
+        VALUE=$1
+      fi
+      LOGS="$LOGS $VALUE"
+      ;;
+    *)
+      if [[ "${PARAM:0:1}" == "-" ]]; then
+        echo "ERROR: unknown parameter \"$PARAM\""
+        usage
+        exit 1
+      fi
+      SERVICES="$SERVICES $PARAM"
+      ;;
+  esac
+  shift
+done
 
-var longest_tag = 0
-var color_index = 0
-var loaded_files = []
-
-program
-  .version('1.0.0')
-  .option('-f, --file [file]', 'compose file (.yml)')
-  .option('-p, --project-name [name]', 'project')
-  .option('-l, --log [patterns]', 'log tags to print (e.g. *service*,redis)')
-  .command('up')
-  .action(function () {
-    var compose_file = path.resolve(program.file)
-    var project = program.projectName
-    var logs = (program.log || '!*.*').split(',')
-
-    relaunch(compose_file, {
-      project: project,
-      logs: logs,
-      rebuild: true
-    }).then(function (services) {
-      /**
-       * aggregate watched files across all services
-       */
-      var all_watched = []
-      var unique = []
-      for (var service_name in services) {
-        all_watched = all_watched.concat(services[service_name].files)
-      }
-      all_watched.sort(function (a,b) { return a.length - b.length })
-      for (var idx in all_watched) {
-        var volume = all_watched[idx]
-        var include = true
-        for (var jdx in unique) {
-          var dir = unique[jdx]
-          if (volume.indexOf(dir) === 0) { include = false; break }
-        }
-        include && unique.push(volume)
-      }
-
-      watch(unique, project)
-
-      function watch (file, project) {
-        filewatch(file, on_change.bind(this))
-      }
-
-      function on_change (filename) {
-        // TODO: this doesn't handle adapting to changes in compose file
-        // (added/removed links, volumes, services, externals, etc)
-        // Should check if this is a loaded file
-        for (var name in services) {
-          services[name].files.forEach(function (dir) {
-            if (filename.indexOf(dir) !== 0) return
-            if (services[name].restarting) return
-            restart_service(services[name], { filename: filename, project: project })
-          })
-        }
-      }
-    })
-  })
-
-program
-  .command('cleanup')
-  .action(function () {
-    var out = cp.execSync('docker ps -a | tail -n +2 | awk \'{ print $1 }\' | xargs docker rm -f')
-    console.log(String(out))
-  })
-
-program
-  .parse(process.argv)
-
-
-function relaunch (compose_file, options) {
-  if (loaded_files[compose_file]) return loaded_files[compose_file]
-
-  options = options || {}
-  var project = options.project || path.basename(compose_file)
-  var logs = options.logs || []
-  var bind = options.bind
-
-  var services = {}
-  var with_externals = yaml.safeLoad(fs.readFileSync(compose_file))
-  var externals = with_externals.externals || {}
-
-  var loading = []
-  // resolve & launch external services
-  Object.keys(externals).forEach(function (namespace) {
-    var external = externals[namespace]
-    external = path.resolve(path.dirname(compose_file), external)
-    loading.push(relaunch(external, {
-      project: project,
-      logs: logs,
-      namespace: options.namespace ? options.namespace + '.' + namespace : namespace
-    }).then(function (external_services) {
-      for (var service in external_services) {
-        var this_namespace = namespace.split('.')
-        var service_namespace = external_services[service].namespace.split('.')
-        if (this_namespace.length < service_namespace.length) {
-          external_services[service].namespace = this_namespace.join('.')
-        }
-        services[namespace + '.' + service] = external_services[service]
-      }
-    }))
-  })
-
-  loaded_files[compose_file] = Promise.all(loading).then(function () {
-    var compose_json = except(with_externals, 'externals')
-
-    /**
-     * collect watchfiles for local services and launch
-     */
-
-    var local = {}
-    loading = []
-    for (var service_name in compose_json) {
-      var service = compose_json[service_name]
-
-      if (service.external_links) {
-        service.external_links = service.external_links.map(function (link) {
-          var service = link.split(':')[0]
-          if (services[service]) service = services[service].container
-          var alias = link.split(':')[1] || service
-          return [service, alias].join(':')
-        })
-      }
-
-      var volumes = resolve_service_volumes(
-        compose_json,
-        service,
-        path.dirname(path.resolve(compose_file))
-      )
-
-      volumes.push(path.resolve(compose_file))
-
-      // filter out duplicates (e.g. /var/home and /var/home/xyz)
-      // since we don't want to trigger multiple restarts on change
-      // for any given service
-
-      volumes.sort(function (a, b) { return a.length - b.length })
-      var top_level = []
-      for (var idx in volumes) {
-        var volume = volumes[idx]
-        var include = true
-        for (var jdx in top_level) {
-          var dir = top_level[jdx]
-          if (volume.indexOf(dir) === 0) { include = false; break }
-        }
-        include && top_level.push(volume)
-      }
-
-      services[service_name] = { service: service }
-      services[service_name].files = top_level
-      services[service_name].name = service_name
-      services[service_name].color = log_colors[(color_index++) % log_colors.length]
-      services[service_name].yaml = yaml.safeDump(compose_json)
-      services[service_name].compose_file = compose_file
-      services[service_name].project = project
-      services[service_name].namespace = options.namespace || ''
-
-      var tag = service_name
-      if (options.namespace) tag = options.namespace + '.' + tag
-      options.logs.forEach(function (pattern) {
-        services[service_name].logs_enabled = match(tag, pattern)
-      })
-    }
-
-    return launch_compose_file(compose_file, compose_json, services, { rebuild: options.rebuild, project: project })
-  }).then(function () {
-    return services
-  })
-
-  return loaded_files[compose_file]
+function watchdog {
+  while read -d "" event; do
+    echo "file $event was changed"
+    if echo $event | grep -i docker; then docker-compose up -d $2;
+    else docker-compose restart -t0 $2; fi
+  done < <(fswatch -0 -e '.*' $1 -r `pwd`)
 }
 
-function launch_compose_file (filename, json, services, options) {
-  var project = options.project
-
-  var on_log = function (data) { console.log(String(data).trim()) }
-  var on_err = function (data) { console.error(String(data).trim()) }
-
-  var opts = {
-    cwd: path.dirname(filename),
-    env: process.env,
-    input: yaml.safeDump(json),
-    on_log: on_log,
-    on_err: on_err
-  }
-
-  var launch = Promise.resolve()
-  if (options.rebuild) {
-    launch = launch.then(function stop_containers () {
-      return spawnAndWait('docker-compose', [ '-f', '-', '-p', project, 'stop', '-t', '0' ], opts)
-    }).then(function remove_containers () {
-      return spawnAndWait('docker-compose', [ '-f', '-', '-p', project, 'rm', '-f' ], opts)
-    }).then(function rebuild_containers () {
-      return Object.keys(json)
-    }).map(function rebuild_containers (service_name) {
-      var service = services[service_name]
-      if (!service.service.build) return
-      return spawnAndWait('docker', [ 'build', '-t', service.project + '_' + service.name, service.service.build ], opts)
-    })
-  }
-
-  launch = launch.then(function launch_containers () {
-    var args = [ '-f', '-', '-p', project, 'up', '-d' ]
-    return spawnAndWait('docker-compose', args, opts)
-  }).then(function get_service_names () {
-    return Object.keys(json)
-  }).map(function (service_name) {
-    var container = cp.spawnSync(__dirname + '/container-name', [ project, service_name ], opts)
-    return { name: service_name, container: String(container.stdout).trim() }
-  }).map(function set_container_name (service) {
-    services[service.name].container = service.container
-    return services[service.name]
-  }).map(function attach_to_logs (service) {
-    if (service.log) service.log.kill()
-    var args = [ '-f', '-', '-p', project, 'logs', '--no-color', service.name ]
-    var ps = cp.spawn('docker-compose', args, opts)
-    ps.stdout.on('data', log_lines.bind(service, 'log'))
-    ps.stderr.on('data', log_lines.bind(service, 'error'))
-    ps.stdin.write(opts.input)
-    ps.stdin.end()
-    service.log = ps
-  })
-
-  return launch
+function usage {
+  echo "get help"
 }
 
-/**
- * Trigger a service restart
- */
+config=$(docker-compose config)
+SERVICES=${SERVICES:-$(echo "$config" | yaml2json | jq -r '.services | keys[]')}
+LOGS=${LOGS:-$SERVICES}
 
-function restart_service (service, options) {
-  service.restarting = true
-  if (options.filename) {
-    console.log(service.color('%s changed - restarting %s...'), path.relative(process.cwd(), options.filename), service.name)
-  } else {
-    console.log(service.color('starting %s...'), service.name)
-  }
+for service in $SERVICES; do
+  includes=
+  volumes=$(echo "$config" | yaml2json | jq -r ".services | to_entries | .[] | select(.key == \"$service\") | .value.volumes[]")
+  for volume in $volumes; do
+    host=$(echo $volume | awk -F: '{ print $1 }')
+    container=$(echo $volume | awk -F: '{ print $2 }')
+    opts=$(echo $volume | awk -F: '{ print $3 }')
+    if [[ "${host:0:1}" == "/" && "${container:0:1}" == "/" ]]; then
+      echo "watching $host for $service"
+      includes="$includes -i $host.*"
+    fi
+  done
+  if [[ "$includes" != "" ]]; then
+    watchdog "$includes" $service &
+  fi
+done
 
-  var project = options.project
-  var on_log = function (data) { console.log(service.color(String(data).trim())) }
-  var on_err = function (data) { console.error(service.color(String(data).trim())) }
+last=$(gdate -u +%Y-%m-%dT%H:%M:%S.%NZ)
+docker-compose up -d $SERVICES
 
-  var opts = {
-    cwd: path.dirname(service.compose_file),
-    env: process.env,
-    input: service.yaml,
-    on_log: on_log,
-    on_err: on_err
-  }
+trap cleanup SIGINT SIGTERM
 
-  if (service.log) service.log.kill()
-  return Promise.resolve().then(function stop_container () {
-    return spawnAndWait('docker-compose', [ '-f', '-', '-p', project, 'stop', '-t', '0', service.name ], opts)
-  }).then(function remove_container () {
-    return spawnAndWait('docker-compose', [ '-f', '-', '-p', project, 'rm', '-f', service.name ], opts)
-  }).then(function build_container () {
-    if (!service.service.build) return
-    return spawnAndWait('docker', [ 'build', '-t', service.project + '_' + service.name, service.service.build ], opts)
-  }).then(function launch_container () {
-    var args = [ '-f', '-', '-p', project, 'up', '-d', '--no-deps', service.name ]
-    return spawnAndWait('docker-compose', args, opts)
-  }).then(function get_container_name () {
-    return cp.spawnSync(__dirname + '/container-name', [ project, service.name ], opts)
-  }).then(function set_container_name (name_ps) {
-    service.container = String(name_ps.stdout).trim()
-  }).then(function attach_to_logs () {
-    var args = [ '-f', '-', '-p', project, 'logs', '--no-color', service.name ]
-    var ps = cp.spawn('docker-compose', args, opts)
-    ps.stdout.on('data', log_lines.bind(service, 'log'))
-    ps.stderr.on('data', log_lines.bind(service, 'error'))
-    ps.stdin.write(service.yaml)
-    ps.stdin.end()
-    service.log = ps
-  }).then(function () {
-    service.restarting = false
-    return service
-  })
-}
-
-/**
- * Log formatter
- */
-
-function log_lines(pipe, lines) {
-  var color = this.color || function (x) { return x }
-  // TODO: ignore past logs
-  String(lines).trim().split('\n').forEach(function (data) {
-    if (~data.indexOf('exited with code 137')) {
-      restart_service(this, { project: this.project })
-    }
-    if (!this.logs_enabled) return
-    data = data.trim()
-    data = data.split('|')
-    var tag = data[0].trim()
-    if (data.length > 1) {
-      if (this.namespace) tag = this.namespace + '.' + tag
-      longest_tag = Math.max(longest_tag, tag.length)
-      while (tag.length < longest_tag) tag += ' '
-      tag += ' |'
-    }
-    data = data.slice(1).join('|').trim()
-    console[pipe](color(tag), data)
-  }, this)
-}
-
-/**
- * Get list of host volumes a service depends on
- */
-
-function resolve_service_volumes (services, service, dir) {
-  var volumes = []
-
-  // watch for changes to build context
-  // TODO: integrate with .dockerignore
-  if (service.build) volumes.push(path.resolve(dir, service.build))
-
-  if (service.extends) {
-    var extended = service
-    var abs_path = dir
-    if (service.extends.file) {
-      abs_path = path.resolve(dir, service.extends.file)
-      extended = yaml.safeLoad(cp.execSync('dcao-include ' + abs_path))
-    }
-
-    // watch for changes to compose file itself
-    volumes.push(abs_path)
-
-    // pull any volumes from the extended service
-    extended = extended[service.extends.service]
-    volumes = volumes.concat(resolve_service_volumes(services, extended, path.dirname(abs_path)))
-  }
-
-  //
-  volumes = volumes.concat(host_volumes(services, service, dir))
-  return volumes.filter(Boolean)
-}
-
-function host_volumes (services, service, dir) {
-  var volumes = []
-
-  // Watch changes to host volumes
-  // defined in this service
-  if (service.volumes) {
-    service.volumes.forEach(function (vol) {
-      var host_data = ~vol.indexOf(':') && vol.split(':')[0]
-      host_data && volumes.push(path.resolve(dir, host_data))
-    })
-  }
-
-  // Watch changes to host volumes
-  // pulled in from other services
-  if (service.volumes_from) {
-    service.volumes_from.forEach(function (other) {
-      var volumes = services[other].volumes || []
-      volumes.forEach(function (vol) {
-        var host_data = ~vol.indexOf(':') && vol.split(':')[0]
-        host_data && volumes.push(path.resolve(dir, host_data))
-      })
-    })
-  }
-
-  return volumes
-}
-
-// process.on('SIGINT', function () {
-//   if (Object.keys(apps).length === 0) process.exit(0)
-//   for (var service in apps) apps[service].kill()
-// })
-
-// process.on('SIGTERM', function () {
-//   if (Object.keys(apps).length === 0) process.exit(0)
-//   for (var service in apps) apps[service].kill()
-// })
+while true; do
+  while read -r line; do
+    timestamp=$(echo $line | awk '{ print $3 }')
+    if [[ "$timestamp" > "$last" ]]; then
+      if echo $line | awk '{ print $2 }' | grep '|' &> /dev/null; then
+        echo $line | awk '!($3="")' | sed 's/  / /'
+      else
+        echo $line
+      fi
+    fi
+  done < <(stdbuf -oL docker-compose logs --tail 100 -f -t $LOGS)
+  last=$(gdate -u +%Y-%m-%dT%H:%M:%S.%NZ)
+  sleep 2
+done

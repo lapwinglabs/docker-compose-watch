@@ -1,9 +1,0 @@
-externals:
-  shared: ../shared/shared.yml
-
-service1:
-  image: ubuntu
-  external_links:
-    - shared.cache:cache
-    - shared.db:db
-  command: 'sh -c "while true; do echo service1 is active; sleep 5; done"'

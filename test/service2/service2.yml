@@ -1,8 +1,0 @@
-externals:
-  service1: ../service1/service1.yml
-
-service2:
-  image: ubuntu
-  external_links:
-    - service1.service1:service1
-  command: 'sh -c "while true; do echo service2 is active; sleep 5; done"'
