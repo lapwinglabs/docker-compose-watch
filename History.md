@@ -1,4 +1,12 @@
 
+2.0.1 / 2016-08-24
+==================
+
+  * update README
+  * support -f and -p docker-compose options
+  * update README
+  * remove node_modules from .gitignore
+
 2.0.0 / 2016-08-24
 ==================
 
