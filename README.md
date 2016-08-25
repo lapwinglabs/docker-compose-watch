@@ -32,6 +32,6 @@ When you kill the script, it uses `docker-compose` to stop all services specifie
 
 ## Things I'll probably need soon...
 - [ ] support for `volumes_from`
-- [ ] specification of alternate docker-compose file
+- [x] specification of alternate docker-compose file
 - [ ] watching for changes to docker-compose file itself and re-up all services on change
 - [ ] support for watching the build context of services and rebuilding service image on change
