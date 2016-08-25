@@ -6,8 +6,8 @@ if ! which yaml2json &> /dev/null; then
   deps=1
 fi
 
-if ! which docker-compose &> /dev/null; then
-  echo "This script requires that docker-compose be installed (https://github.com/docker/compose/blob/master/docs/install.md)"
+if ! which docker-compose $FILES $PROJECT &> /dev/null; then
+  echo "This script requires that docker-compose $FILES $PROJECT be installed (https://github.com/docker/compose/blob/master/docs/install.md)"
   deps=1
 fi
 
@@ -29,13 +29,15 @@ fi
 if [[ "$deps" == "1" ]]; then exit 1; fi
 
 function cleanup {
-  docker-compose stop $SERVICES
+  docker-compose $FILES $PROJECT stop $SERVICES
   exit 0
 }
 
 SERVICES=
 LOGS=
 EXCLUDES=
+FILES=
+PROJECT=
 
 while [ "$1" != "" ]; do
   PARAM=`printf "%s\n" "$1" | awk -F= '{print $1}'`
@@ -52,6 +54,20 @@ while [ "$1" != "" ]; do
       fi
       LOGS="$LOGS $VALUE"
       ;;
+    -f | --file)
+      if [[ "$VALUE" == "" ]]; then
+        shift
+        VALUE=$1
+      fi
+      FILES="$FILES -f $VALUE"
+      ;;
+    -p | --project-name)
+      if [[ "$VALUE" == "" ]]; then
+        shift
+        VALUE=$1
+      fi
+      PROJECT="-p $VALUE"
+      ;;
     *)
       if [[ "${PARAM:0:1}" == "-" ]]; then
         echo "ERROR: unknown parameter \"$PARAM\""
@@ -67,8 +83,8 @@ done
 function watchdog {
   while read -d "" event; do
     echo "file $event was changed"
-    if echo $event | grep -i docker; then docker-compose up -d $2;
-    else docker-compose restart -t0 $2; fi
+    if echo $event | grep -i docker; then docker-compose $FILES $PROJECT up -d $2;
+    else docker-compose $FILES $PROJECT restart -t0 $2; fi
   done < <(fswatch -0 -e '.*' $1 -r `pwd`)
 }
 
@@ -76,7 +92,7 @@ function usage {
   echo "get help"
 }
 
-config=$(docker-compose config)
+config=$(docker-compose $FILES $PROJECT config)
 SERVICES=${SERVICES:-$(echo "$config" | yaml2json | jq -r '.services | keys[]')}
 LOGS=${LOGS:-$SERVICES}
 
@@ -98,7 +114,7 @@ for service in $SERVICES; do
 done
 
 last=$(gdate -u +%Y-%m-%dT%H:%M:%S.%NZ)
-docker-compose up -d $SERVICES
+docker-compose $FILES $PROJECT up -d $SERVICES
 
 trap cleanup SIGINT SIGTERM
 
@@ -112,7 +128,7 @@ while true; do
         echo $line
       fi
     fi
-  done < <(stdbuf -oL docker-compose logs --tail 100 -f -t $LOGS)
+  done < <(stdbuf -oL docker-compose $FILES $PROJECT logs --tail 100 -f -t $LOGS)
   last=$(gdate -u +%Y-%m-%dT%H:%M:%S.%NZ)
   sleep 2
 done
