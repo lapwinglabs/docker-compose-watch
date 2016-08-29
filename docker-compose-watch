@@ -128,7 +128,7 @@ while true; do
         echo $line
       fi
     fi
-  done < <(stdbuf -oL docker-compose $FILES $PROJECT logs --tail 100 -f -t $LOGS)
+  done < <(gstdbuf -oL docker-compose $FILES $PROJECT logs --tail 100 -f -t $LOGS)
   last=$(gdate -u +%Y-%m-%dT%H:%M:%S.%NZ)
   sleep 2
 done
