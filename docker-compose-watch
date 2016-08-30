@@ -114,7 +114,7 @@ for service in $SERVICES; do
 done
 
 last=$(gdate -u +%Y-%m-%dT%H:%M:%S.%NZ)
-docker-compose $FILES $PROJECT up -d $SERVICES
+docker-compose $FILES $PROJECT up --build -d $SERVICES
 
 trap cleanup SIGINT SIGTERM
 
