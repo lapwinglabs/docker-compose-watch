@@ -38,6 +38,8 @@ LOGS=
 EXCLUDES=
 FILES=
 PROJECT=
+VOLUMES=
+BUILD=
 
 while [ "$1" != "" ]; do
   PARAM=`printf "%s\n" "$1" | awk -F= '{print $1}'`
@@ -68,6 +70,12 @@ while [ "$1" != "" ]; do
       fi
       PROJECT="-p $VALUE"
       ;;
+    -b | --build)
+      BUILD="--build"
+      ;;
+    -v | --volumes)
+      VOLUMES="true"
+      ;;
     *)
       if [[ "${PARAM:0:1}" == "-" ]]; then
         echo "ERROR: unknown parameter \"$PARAM\""
@@ -81,15 +89,17 @@ while [ "$1" != "" ]; do
 done
 
 function watchdog {
+  cmd="fswatch -0 -e '.*' `echo "$1"` -r `pwd`"
+  echo "$cmd"
   while read -d "" event; do
     echo "file $event was changed"
-    if echo $event | grep -i docker; then docker-compose $FILES $PROJECT up -d $2;
+    if echo $event | grep -iE 'docker|package.json|makefile' &>/dev/null; then docker-compose $FILES $PROJECT up -d ${BUILD} $2;
     else docker-compose $FILES $PROJECT restart -t0 $2; fi
-  done < <(fswatch -0 -e '.*' $1 -r `pwd`)
+  done < <(eval "$cmd")
 }
 
 function usage {
-  echo "get help"
+  echo "figure it out"
 }
 
 config=$(docker-compose $FILES $PROJECT config)
@@ -97,13 +107,13 @@ SERVICES=${SERVICES:-$(echo "$config" | yaml2json | jq -r '.services | keys[]')}
 LOGS=${LOGS:-$SERVICES}
 
 for service in $SERVICES; do
-  includes=
+  includes="-i Dockerfile -i package.json -i Makefile -i docker-compose"
   volumes=$(echo "$config" | yaml2json | jq -r ".services | to_entries | .[] | select(.key == \"$service\") | .value.volumes[]")
   for volume in $volumes; do
     host=$(echo $volume | awk -F: '{ print $1 }')
     container=$(echo $volume | awk -F: '{ print $2 }')
     opts=$(echo $volume | awk -F: '{ print $3 }')
-    if [[ "${host:0:1}" == "/" && "${container:0:1}" == "/" ]]; then
+    if [[ "$VOLUMES" == "true" && "${host:0:1}" == "/" && "${container:0:1}" == "/" ]]; then
       echo "watching $host for $service"
       includes="$includes -i $host.*"
     fi
