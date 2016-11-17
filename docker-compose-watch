@@ -30,6 +30,17 @@ if [[ "$deps" == "1" ]]; then exit 1; fi
 
 function cleanup {
   docker-compose $FILES $PROJECT stop $SERVICES
+
+  echo
+  echo "Stopping tails $(jobs -p | tr '\n' ' ')"
+  echo "..."
+
+  # Using `sh -c` so that if some have exited, that error will
+  # not prevent further tails from being killed.
+  jobs -p | tr '\n' ' ' | xargs -I % sh -c "kill % &>/dev/null || true"
+
+  echo "Done"
+
   exit 0
 }
 
@@ -40,6 +51,8 @@ FILES=
 PROJECT=
 VOLUMES=
 BUILD=
+
+project_name=$(basename $PWD)
 
 while [ "$1" != "" ]; do
   PARAM=`printf "%s\n" "$1" | awk -F= '{print $1}'`
@@ -68,6 +81,7 @@ while [ "$1" != "" ]; do
         shift
         VALUE=$1
       fi
+      project_name=$VALUE
       PROJECT="-p $VALUE"
       ;;
     -b | --build)
@@ -90,7 +104,6 @@ done
 
 function watchdog {
   cmd="fswatch -0 -e '.*' `echo "$1"` -r `pwd`"
-  echo "$cmd"
   while read -d "" event; do
     echo "file $event was changed"
     if echo $event | grep -iE 'docker|package.json|makefile' &>/dev/null; then docker-compose $FILES $PROJECT up -d ${BUILD} $2;
@@ -103,12 +116,12 @@ function usage {
 }
 
 config=$(docker-compose $FILES $PROJECT config)
-SERVICES=${SERVICES:-$(echo "$config" | yaml2json | jq -r '.services | keys[]')}
+SERVICES=${SERVICES:-$(echo "$config" | yaml2json | jq -r '.services | keys[]' 2>/dev/null)}
 LOGS=${LOGS:-$SERVICES}
 
 for service in $SERVICES; do
   includes="-i Dockerfile -i package.json -i Makefile -i docker-compose"
-  volumes=$(echo "$config" | yaml2json | jq -r ".services | to_entries | .[] | select(.key == \"$service\") | .value.volumes[]")
+  volumes=$(echo "$config" | yaml2json | jq -r ".services | to_entries | .[] | select(.key == \"$service\") | .value.volumes[]" 2>/dev/null)
   for volume in $volumes; do
     host=$(echo $volume | awk -F: '{ print $1 }')
     container=$(echo $volume | awk -F: '{ print $2 }')
@@ -128,17 +141,67 @@ docker-compose $FILES $PROJECT up --build -d $SERVICES
 
 trap cleanup SIGINT SIGTERM
 
-while true; do
-  while read -r line; do
-    timestamp=$(echo $line | awk '{ print $3 }')
-    if [[ "$timestamp" > "$last" ]]; then
-      if echo $line | awk '{ print $2 }' | grep '|' &> /dev/null; then
-        echo $line | awk '!($3="")' | sed 's/  / /'
-      else
-        echo $line
+pname_len=$(echo "$project_name" | wc -c | tr -d ' ')
+containers=$(docker-compose $FILES $PROJECT ps $LOGS 2>/dev/null | tail -n +3 | grep -v Exit | awk '{ print $1 }')
+
+max_len=0
+while read -r name; do
+  container=$(echo $name | cut -c $((pname_len + 1))-)
+  service=$(echo $container | sed -e 's/_[0123456789]\+$//g')
+
+  container_len=$(echo $container | wc -c | tr -d ' ')
+  service_len=$(echo $service | wc -c | tr -d ' ')
+
+  scale=$(echo "$container" | cut -c $((service_len + 1))-)
+
+  if [[ $container_len > $max_len ]]; then
+    max_len=$container_len
+  fi
+done <<< "$containers"
+
+DIM="\033[2m"
+COLORS=("\033[1;31m" "\033[1;32m" "\033[1;33m" "\033[1;34m" "\033[1;35m" "\033[1;36m" "\033[1;37m" "\033[1;39m" "\033[1;30m")
+COLOR_COUNT=${#COLORS[@]}
+CLOSE="\033[0m"
+
+index=0
+while read -r name; do
+  color=${COLORS[$index]}
+
+  container=$(echo $name | cut -c $((pname_len + 1))-)
+  service=$(echo $container | sed -e 's/_[0123456789]\+$//g')
+
+  container_len=$(echo $container | wc -c | tr -d ' ')
+  service_len=$(echo $service | wc -c | tr -d ' ')
+
+  scale=$(echo "$container" | cut -c $((service_len + 1))-)
+
+  formatted_container=$(printf "%${max_len}s" $container)
+
+  eval "
+    lst=$last
+    while true; do
+
+      # Check that container hasn't exited
+      alive=\$(docker ps -a --format '{{ .Names }} {{ .Status }}' | grep $name | grep -v Exit)
+      if [[ \"\$alive\" == \"\" ]]; then
+        echo -e \" ${DIM} closing logstream because container $container has exited${CLOSE}\"
+        exit 0
       fi
-    fi
-  done < <(gstdbuf -oL docker-compose $FILES $PROJECT logs --tail 100 -f -t $LOGS)
-  last=$(gdate -u +%Y-%m-%dT%H:%M:%S.%NZ)
-  sleep 2
-done
+
+      # Stream container logs
+      while read -r line; do
+        echo -e \"$color$formatted_container |$CLOSE \$line\"
+      done < <(gstdbuf -oL docker logs -f --since \$lst \"$name\")
+
+      # Reattach on exit
+      echo -e \" ${DIM} reattaching to logstream of $container${CLOSE}\"
+      lst=\$(gdate -u +%Y-%m-%dT%H:%M:%S.%NZ)
+      sleep 2
+
+    done &"
+
+  index=$(((index + 1) % COLOR_COUNT))
+done <<< "$containers"
+
+wait
